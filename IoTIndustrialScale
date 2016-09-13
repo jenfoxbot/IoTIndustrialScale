@@ -1,0 +1,252 @@
+//Impact Force Plate with the SparkFun OpenScale!
+
+//This code was written by Jennifer Fox <jenfoxbot@gmail.com>
+//Many thanks to the folks at ThingSpeak and The MathWorks, Inc. for the ThingSpeak code examples!
+//Many thanks to SparkFun + N. Seidle for the OpenScale code examples!
+
+/*
+ * ----------------------------------------------------------------------------
+ * "THE COFFEE-WARE LICENSE" (Revision 42):
+ * <jenfoxbot@gmail.com>  wrote this file.  As long as you retain this notice you
+ * can do whatever you want with this stuff. If we meet some day, and you think
+ * this stuff is worth it, you can buy me a coffee (or a beer!) in return.
+ * ----------------------------------------------------------------------------
+ */
+
+//Include libraries
+#include "ThingSpeak/ThingSpeak.h"
+
+//Set up variable for local time -- adjust for your timezone 
+int local_hour_offset = 9; //PST time is 9 hours off GMT
+
+
+/*  Set up ThingSpeak Channel -- IMPORTANT: Change ssid[],  pass[], myChannelNumber, and myWriteAPIKey
+-------------------------------------------------------------------------------------------------------
+   From ThingSpeak: This example selects the correct library to 
+   use based on the selected board. Yun, Wired Ethernet shield, 
+   wi-fi shield, esp8266, and Spark are all supported. With Uno and 
+   Mega, the default is that you're using a wired ethernet shield.
+
+   Visit https://www.thingspeak.com to sign up for a free account 
+   and create a channel. 
+*/
+#ifdef SPARK
+	#include "ThingSpeak/ThingSpeak.h"
+#else
+	#include "ThingSpeak.h"
+#endif
+
+//#define USE_WIFI_SHIELD
+#ifdef ARDUINO_ARCH_AVR
+
+  #ifdef ARDUINO_AVR_YUN
+    #include "YunClient.h"
+    YunClient client;
+  #else
+
+    #ifdef USE_WIFI_SHIELD
+      #include <SPI.h>
+      // ESP8266 USERS -- YOU MUST COMMENT OUT THE LINE BELOW (due to bug).  
+      // If you get "multiple definition of `WiFi'" -- comment out the line below.
+      #include <WiFi.h>
+      
+      char ssid[] = "SSID";     //  <-------------------- CHANGE THIS to your network SSID (name) 
+      char pass[] = "PASSWORD";   //   <-------------------- CHANGE THIS to your network password 
+      int status = WL_IDLE_STATUS;
+      WiFiClient  client;
+    #else
+      // Use wired ethernet shield
+      #include <SPI.h>
+      #include <Ethernet.h>
+      byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
+      EthernetClient client;
+    #endif
+  #endif
+#endif
+
+#ifdef ARDUINO_ARCH_ESP8266
+  #include <ESP8266WiFi.h>
+  char ssid[] = "SSID";     //  <-------------------- CHANGE THIS to your network SSID (name) 
+  char pass[] = "PASSWORD";   //   <-------------------- CHANGE THIS to your network password 
+  int status = WL_IDLE_STATUS;
+  WiFiClient  client;
+ 
+#endif
+
+#ifdef SPARK
+    TCPClient client;
+#endif
+
+/*
+  Change these two variables to your channel number, and your write API key.
+  IF YOU SHARE YOUR CODE, BE SURE TO REMOVE YOUR WRITE API KEY!!
+*/
+unsigned long myChannelNumber = NUMBER_HERE;           // <----------------- CHANGE THIS to your channel number
+const char * myWriteAPIKey = "API_KEY_HERE"; //  <----------------- CHANGE THIS to your write API key
+
+
+
+//---------- Set up the Photon ---------------------------------------------------------------------------------------
+void setup() {
+    
+	Wire.setSpeed(CLOCK_SPEED_100KHZ); //Default, added for 
+	Wire.begin();
+
+    Serial.begin(9600); //Debug terminal
+    Serial1.begin(9600); //TX/RX from OpenScale
+    
+//Set up the ThingSpeak channel
+  #if defined(ARDUINO_ARCH_AVR) || defined(ARDUINO_ARCH_ESP8266)
+    #ifdef ARDUINO_AVR_YUN
+      Bridge.begin();
+    #else
+      #if defined(USE_WIFI_SHIELD) || defined(ARDUINO_ARCH_ESP8266)
+        WiFi.begin(ssid, pass);
+      #else
+        Ethernet.begin(mac);
+      #endif
+    #endif
+  #endif
+ 
+  ThingSpeak.begin(client);
+ 
+}
+
+//----------  Photon Program loop  -----------------------------------------------------------------------------------
+void loop() {
+    
+     //Check the weight
+    float weightLBS = readWeight();
+
+    //Figure out the local time including DST, not UTC
+    String localTime = calcLocalTime();
+    char tempStr[64];
+    localTime.toCharArray(tempStr, 64);
+    
+    
+// Read in the TX data and push to the client
+//TO ADD MORE FIELDS: repeat lines 129 and 132 for each field, changing the variable name
+	Serial.print("Weight:"); Serial.println(weightLBS, 2);
+	Serial.println();
+
+     ThingSpeak.setField(1,weightLBS);
+  
+  // Write the fields that you've set all at once.
+  ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);  
+
+  delay(1000); // Delay affects the serial monitor output only. ThingSpeak will only accept updates every 15 seconds. 
+}
+
+
+//----- Function to read weight from the OpenScale -- many thanks to N. Seidle for the function code! ----------------
+float readWeight()
+{
+    int timeOut = 2000; //Number of miliseconds before giving up
+    int counter;
+    
+    //Clear out any trash in the buffer
+    while(Serial1.available()) Serial1.read();
+    
+    //Send any character to trigger a read
+    Serial1.print('.');
+    
+    //Now we need to spin to the first comma after the time stamp
+    counter = 0;
+    while(Serial1.read() != ',')
+    {
+        if(counter++ == timeOut) return(0); //Error
+        delay(1);
+    }
+
+    //Now we read the weight
+    counter = 0;
+    String weightStr;
+    while(1)
+    {
+        if(Serial1.available())
+        {
+            char incoming = Serial1.read();
+            if(incoming == ',')
+            {
+                //We're done!
+                return(weightStr.toFloat());
+            }
+            else
+            {
+                weightStr.concat(String(incoming));
+            }
+        }
+        
+        if(counter++ == timeOut) return(0); //Error
+        delay(1);
+    }
+        
+
+}
+
+//----- Calculate local time -- many thanks to N. Seidle for the function code! --------------------------------------
+String calcLocalTime()
+{
+    //Get the time that this measurement was taken
+    int hour = Time.hour(); //Most of the work will be on the current hour
+
+    //Since 2007 DST starts on the second Sunday in March and ends the first Sunday of November
+    //Let's just assume it's going to be this way for awhile (silly US government!)
+    //Example from: http://stackoverflow.com/questions/5590429/calculating-daylight-savings-time-from-only-date
+    bool dst = false; //Assume we're not in DST
+    
+    if(Time.month() > 3 && Time.month() < 11) dst = true; //DST is happening!
+
+    int DoW = Time.weekday() - 1; //Get the day of the week. 0 = Sunday, 6 = Saturday
+
+    //In March, we are DST if our previous Sunday was on or after the 8th.
+    int previousSunday = Time.day() - DoW;
+    if (Time.month() == 3)
+    {
+        if(previousSunday >= 8) dst = true; 
+    } 
+    //In November we must be before the first Sunday to be dst.
+    //That means the previous Sunday must be before the 1st.
+    if(Time.month() == 11)
+    {
+        if(previousSunday <= 0) dst = true;
+    }
+
+    if(dst == true) hour++; //If we're in DST add an extra hour
+    
+    //Convert UTC hours to local current time using local_hour
+    if(hour < local_hour_offset)
+        hour += 24; //Add 24 hours before subtracting local offset
+    hour -= local_hour_offset;
+
+    String AMPM = "AM";
+    if(hour > 12)
+    {
+        hour -= 12; //Get rid of military time
+        AMPM = "PM";
+    }
+    if(hour == 12) AMPM = "PM"; //Noon correction
+    if(hour == 0) hour = 12; //Mid-night correction
+
+    //Stick all the parts together
+    //Would be nice to do a sprintf for the entire thing but sprintf doesn't like %3A colons
+    String prettyTime;
+    char part[2];
+
+    sprintf(part, "%02d", hour);
+    prettyTime.concat(part);
+    prettyTime.concat("%3A");
+
+    sprintf(part, "%02d", Time.minute());
+    prettyTime.concat(part);
+    prettyTime.concat("%3A");
+
+    sprintf(part, "%02d", Time.second());
+    prettyTime.concat(part);
+
+    prettyTime.concat(" ");
+
+    prettyTime.concat(AMPM);
+    
+    return(prettyTime);
+}
