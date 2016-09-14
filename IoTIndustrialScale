@@ -89,7 +89,7 @@ const char * myWriteAPIKey = "API_KEY_HERE"; //  <----------------- CHANGE THIS 
 //---------- Set up the Photon ---------------------------------------------------------------------------------------
 void setup() {
     
-	Wire.setSpeed(CLOCK_SPEED_100KHZ); //Default, added for 
+	Wire.setSpeed(CLOCK_SPEED_100KHZ); //Default
 	Wire.begin();
 
     Serial.begin(9600); //Debug terminal
@@ -119,13 +119,14 @@ void loop() {
     float weightLBS = readWeight();
 
     //Figure out the local time including DST, not UTC
+    //Currently unused
     String localTime = calcLocalTime();
     char tempStr[64];
     localTime.toCharArray(tempStr, 64);
     
     
 // Read in the TX data and push to the client
-//TO ADD MORE FIELDS: repeat lines 129 and 132 for each field, changing the variable name
+//TO PUSH MORE DATA TO THINGSPEAK: repeat lines 129 and 132 for each field, changing the variable name
 	Serial.print("Weight:"); Serial.println(weightLBS, 2);
 	Serial.println();
 
